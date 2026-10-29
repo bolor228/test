@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+  <link rel="icon" href="Difficulties/demon-extreme-epic.png" type="image/png">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RPS Lists</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+  <!-- Top navigation bar -->
+  <nav class="navbar">
+    <div class="navbar-left">
+      <span class="navbar-logo">RPS Lists</span>
+      <div class="navbar-dropdown">
+        <button class="navbar-link navbar-dropdown-toggle" id="listsDropdownToggle">Demon List ▾</button>
+        <div class="navbar-dropdown-menu" id="listsDropdownMenu">
+          <button class="navbar-dropdown-item" data-list="demon">Demon List</button>
+          <button class="navbar-dropdown-item" data-list="platformer">Platformer Demon List</button>
+          <button class="navbar-dropdown-item" data-list="challenge">Challenge List</button>
+          <button class="navbar-dropdown-item" data-list="unverified">Unverified List</button>
+        </div>
+      </div>
+      <button class="navbar-link" id="leaderboardBtn" onclick="toggleLeaderboard()">Leaderboard</button>
+      <button class="navbar-link" id="packsBtn" onclick="togglePacks()">Packs</button>
+      <button class="navbar-link" id="randomBtn" onclick="toggleRandom()">Random</button>
+      <button class="navbar-link" id="expandedBtn" onclick="toggleExpandedMode()">Expanded</button>
+    </div>
+    <div class="navbar-right" style="gap:10px">
+      <button class="theme-toggle" id="themeToggle" title="Toggle theme">☀</button>
+      <input type="text" id="searchInput" class="navbar-search" placeholder="Search levels..." onkeyup="searchLevels()">
+    </div>
+    <!-- Hidden select kept for compatibility with existing onchange-driven logic -->
+    <select id="listType" style="display: none;">
+      <option value="demon">Demon List</option>
+      <option value="platformer">Platformer Demon List</option>
+      <option value="challenge">Challenge List</option>
+      <option value="unverified">Unverified List</option>
+    </select>
+  </nav>
+
+  <div class="container">
+    <div id="randomContainer" style="display: none;">
+      <div class="random-controls">
+        <select id="playerSelect">
+          <option value="">No Player Selected (Random Level)</option>
+        </select>
+        <button id="generateBtn" onclick="generateRandomLevel()">Generate Random Level</button>
+      </div>
+      <div id="randomResult"></div>
+    </div>
+    <div id="levelsList"></div>
+  </div>
+
+  <!-- Packs Popup -->
+  <div id="packsPopup" class="popup">
+    <div class="popup-content">
+      <span class="close-btn" onclick="togglePacks()">&times;</span>
+      <h1>Packs</h1>
+      <div id="packsList" class="packs-list"></div>
+    </div>
+  </div>
+
+  <!-- Leaderboard / Stats Viewer Popup -->
+  <div id="leaderboardPopup" class="popup">
+    <div class="popup-content stats-viewer-content">
+      <span class="close-btn" onclick="toggleLeaderboard()">&times;</span>
+      <h1>Stats Viewer</h1>
+      <div class="stats-viewer">
+        <div class="stats-viewer-sidebar">
+          <input type="text" id="leaderboardSearchInput" class="leaderboard-search" placeholder="Search players by name..." onkeyup="filterLeaderboard()">
+          <div id="ranking" class="ranking"></div>
+        </div>
+        <div class="stats-viewer-main" id="statsViewerMain">
+          <div class="stats-viewer-placeholder">Select a player on the left to view their stats.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+  <script>
+    // Function to get the appropriate difficulty icon based on the level's difficulty
+    function getDifficultyIcon(difficulty) {
+      if (!difficulty) return 'Difficulties/unrated-featured.png'; // Default for challenge list which doesn't have difficulty
+
+      switch(difficulty) {
+        case 'Extreme Demon':
+          return 'Difficulties/demon-extreme-featured.png';
+        case 'Insane Demon':
+          return 'Difficulties/demon-insane-featured.png';
+        case 'Hard Demon':
+          return 'Difficulties/demon-hard-featured.png';
+        case 'Medium Demon':
+          return 'Difficulties/demon-medium-featured.png';
+        case 'Easy Demon':
+          return 'Difficulties/demon-easy-featured.png';
+        default:
+          return 'Difficulties/demon-featured.png';
+      }
+    }
+    // Function to load levels based on selected list type
+    function loadLevels() {
+      const listType = document.getElementById('listType').value;
+      const levelsList = document.getElementById('levelsList');
+      levelsList.innerHTML = ''; // Clear previous levels
+
+      let levelsFile;
+      if (listType === 'demon') {
+        levelsFile = 'Data/demon_levels.json'; // Use demon_levels.json for Demon List
+      } else if (listType === 'platformer') {
+        levelsFile = 'Data/plat_levels.json'; // Use plat_levels.json for Platformer Demon List
+      } else if (listType === 'challenge') {
+        levelsFile = 'Data/chal_levels.json'; // Use chal_levels.json for Challenge List
+      } else if (listType === 'unverified') {
+        levelsFile = 'Data/unver_levels.json'; // Use unver_levels.json for Unverified List
+      }
+
+      // For unverified levels we also want to know projected placement within the demon list,
+      // so we fetch demon_levels.json alongside to compute a range using optional level-above/level-below fields.
+      let fetchPromise;
+      if (listType === 'unverified') {
+        fetchPromise = Promise.all([
+          fetch(levelsFile).then(r => r.json()),
+          fetch('Data/demon_levels.json').then(r => r.json())
+        ]).then(([unverData, demonData]) => ({ data: unverData, demonData }));
+      } else {
+        fetchPromise = fetch(levelsFile)
+          .then(response => response.json())
+          .then(data => ({ data, demonData: null }));
+      }
+
+      // Fetch levels (and demon list when needed)
+      fetchPromise
+        .then(({ data, demonData }) => {
+          let points = 500; // Initial points for the top level
+
+          // Build a quick lookup for demon list positions if available
+          let demonPositionsByName = {};
+          if (demonData && demonData.levels) {
+            demonData.levels.forEach((lvl, idx) => {
+              demonPositionsByName[lvl.name] = idx + 1;
+            });
+          }
+
+          data.levels.forEach((level, index) => { // Iterate with index
+            const levelDiv = document.createElement('div');
+            levelDiv.classList.add('level');
+
+            // Compute projected placement range for unverified levels, if hints are present
+            let projectedPlacementHtml = '';
+            if (listType === 'unverified' && demonData) {
+              const aboveName = level['level-above'] || null;
+              const belowName = level['level-below'] || null;
+              const abovePos = aboveName ? demonPositionsByName[aboveName] : null;
+              const belowPos = belowName ? demonPositionsByName[belowName] : null;
+
+              let rangeText = '';
+
+              if (abovePos && belowPos) {
+                // Level is between two known demons.
+                // If they are adjacent, the projected placement is the single slot between them.
+                const minPos = Math.min(abovePos, belowPos);
+                const maxPos = Math.max(abovePos, belowPos);
+
+                if (maxPos === minPos + 1) {
+                  const newPos = minPos + 1;
+                  rangeText = `#${newPos} (between ${aboveName} at #${abovePos} and ${belowName} at #${belowPos})`;
+                } else {
+                  const start = minPos + 1;
+                  const end = maxPos - 1;
+                  if (start === end) {
+                    rangeText = `#${start} (between ${aboveName} at #${abovePos} and ${belowName} at #${belowPos})`;
+                  } else {
+                    rangeText = `#${start} – #${end} (between ${aboveName} at #${abovePos} and ${belowName} at #${belowPos})`;
+                  }
+                }
+              } else if (!aboveName && belowPos) {
+                // Only a known level below.
+                // If it's the current #1, we're clearly Top 1.
+                if (belowPos === 1) {
+                  rangeText = `#1 (Top 1, above ${belowName} at #1)`;
+                } else {
+                  // Otherwise, infer the level above from the demon list itself so we can still say "between".
+                  const implicitAbovePos = belowPos - 1;
+                  const implicitAboveLevel = demonData.levels[implicitAbovePos - 1];
+                  const implicitAboveName = implicitAboveLevel ? implicitAboveLevel.name : null;
+
+                  if (implicitAboveName) {
+                    const newPos = belowPos; // takes the below level's slot and pushes it down
+                    rangeText = `#${newPos} (between ${implicitAboveName} at #${implicitAbovePos} and ${belowName} at #${belowPos})`;
+                  } else {
+                    // Fallback: we couldn't infer the level above for some reason.
+                    const newPos = belowPos;
+                    rangeText = `#${newPos} (above ${belowName} at #${belowPos})`;
+                  }
+                }
+              } else if (abovePos && !belowName) {
+                // Only a known level above.
+                const lastPos = demonData.levels.length;
+                if (abovePos === lastPos) {
+                  // Already at the bottom; no level below to form a "between" range.
+                  const newPos = abovePos;
+                  rangeText = `#${newPos} (below ${aboveName} at #${abovePos})`;
+                } else {
+                  // Infer the level below from the demon list itself so we can still say "between".
+                  const implicitBelowPos = abovePos + 1;
+                  const implicitBelowLevel = demonData.levels[implicitBelowPos - 1];
+                  const implicitBelowName = implicitBelowLevel ? implicitBelowLevel.name : null;
+
+                  if (implicitBelowName) {
+                    const newPos = abovePos; // takes the above level's slot and pushes it down
+                    rangeText = `#${newPos} (between ${aboveName} at #${abovePos} and ${implicitBelowName} at #${implicitBelowPos})`;
+                  } else {
+                    // Fallback: couldn't infer the level below.
+                    const newPos = abovePos;
+                    rangeText = `#${newPos} (below ${aboveName} at #${abovePos})`;
+                  }
+                }
+              } else if (aboveName || belowName) {
+                // Names are provided but they were not found in the demon list (e.g. typo or outdated name).
+                const parts = [];
+                if (aboveName) parts.push(`above ${aboveName}`);
+                if (belowName) parts.push(`below ${belowName}`);
+                rangeText = parts.join(' and ');
+              }
+
+              if (rangeText) {
+                projectedPlacementHtml = `<p><strong>Projected Placement:</strong> ${rangeText}</p>`;
+              }
+            }
+
+            const imageSrc = level.image ? `Level_Images/${level.image}` : 'Level_Images/template.png';
+            const lvlPoints = points;
+            const detailStatsHtml = `
+              ${listType !== 'challenge' ? `<p><strong>${listType === 'unverified' ? 'Projected Difficulty' : 'Difficulty'}:</strong> ${level.difficulty}</p>` : ''}
+              ${projectedPlacementHtml}
+              <p><strong>Level ID:</strong> ${level.levelID}</p>
+              <p><strong>Creator:</strong> ${level.creator}</p>
+              ${listType === 'unverified' ? `<p><strong>WR:</strong> ${level.wr}</p><p><strong>Previous WRs:</strong> ${level.prevwr}</p>` : ''}
+              <p><strong>Verifier:</strong> ${level.verifier}</p>
+              <p><strong>Percentage Required:</strong> ${level.PercentageRequired}%</p>
+              <p><strong>Points:</strong> ${lvlPoints}</p>
+              ${level.enjoyment !== undefined ? `<p><strong>Enjoyment:</strong> ${level.enjoyment}/100</p>` : ''}`;
+            levelDiv.style.backgroundImage = `url('${imageSrc}')`;
+            levelDiv.innerHTML = `
+              <div class="level-thumb-col"><img class="level-thumb-left" src="${imageSrc}" alt="${level.name}"></div>
+              <div class="level-details">
+                <h2><span class="level-rank">#${index + 1}</span>${level.name}</h2>
+                <p class="level-meta">by ${level.creator} <span class="level-meta-sep">|</span> <span class="level-meta-verifier">${level.verifier}</span></p>
+                <div class="level-tags">
+                  ${level.difficulty && listType !== 'challenge' ? `<span class="chip alt">${level.difficulty}</span>` : ''}
+                  ${level.enjoyment !== undefined ? `<span class="chip alt">Enjoyment ${level.enjoyment}/100</span>` : ''}
+                </div>
+                <div class="level-expanded-details">${detailStatsHtml}</div>
+              </div>
+              <div class="level-points-col">
+                <span class="level-points-value">${lvlPoints}</span>
+                <span class="level-points-label">points</span>
+              </div>`;
+            levelDiv.dataset.detailHtml = detailStatsHtml;
+            levelDiv.dataset.levelName = level.name;
+            levelDiv.dataset.screenshot = level.screenshot || '';
+            levelDiv.dataset.difficultyIcon = getDifficultyIcon(level.difficulty);
+            levelDiv.dataset.difficultyLabel = level.difficulty || '';
+            levelDiv.addEventListener('click', () => showLevelStats(levelDiv));
+            levelsList.appendChild(levelDiv);
+            points = Math.round(points * 0.97); // Calculate points for the next level
+          });
+
+          // Enhance UI with animations after loading levels
+          setTimeout(() => {
+            enhanceUI();
+          }, 100);
+        })
+        .catch(error => console.error('Error fetching levels:', error));
+    }
+
+    // Popup with the full stats for a level (no video, just an optional screenshot)
+    function showLevelStats(levelDiv) {
+      const d = levelDiv.dataset;
+      const popup = document.createElement('div');
+      popup.className = 'popup';
+      popup.id = 'levelStatsPopup';
+      popup.style.display = 'block';
+      popup.innerHTML = `
+        <div class="popup-content level-stats-popup">
+          <span class="close-btn" onclick="document.getElementById('levelStatsPopup').remove()">&times;</span>
+          <div class="level-stats-header">
+            <img src="${d.difficultyIcon}" alt="${d.difficultyLabel}" class="level-stats-difficulty-icon">
+            <h1>${d.levelName}</h1>
+          </div>
+          <div class="level-stats-screenshot-slot"></div>
+          <div class="level-stats-body">${d.detailHtml}</div>
+          <button class="level-beaten-by-btn" onclick="showBeatenBy('${d.levelName.replace(/'/g, "\\'")}')">Completions</button>
+        </div>`;
+      document.body.appendChild(popup);
+      if (d.screenshot) {
+        const img = new Image();
+        img.onload = () => {
+          const slot = popup.querySelector('.level-stats-screenshot-slot');
+          if (slot) slot.outerHTML = `<div class="level-stats-screenshot" style="background-image: url('${d.screenshot}')"></div>`;
+        };
+        img.src = d.screenshot;
+      }
+      setTimeout(() => popup.classList.add('show'), 10);
+    }
+
+    // Light/dark theme toggle
+    (function () {
+      const root = document.documentElement, btn = document.getElementById('themeToggle');
+      root.dataset.theme = 'dark';
+      try { if (localStorage.getItem('theme') === 'light') root.dataset.theme = 'light'; } catch (e) {}
+      const sync = () => btn.textContent = root.dataset.theme === 'dark' ? '☾' : '☀';
+      sync();
+      btn.addEventListener('click', () => {
+        root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+        try { localStorage.setItem('theme', root.dataset.theme); } catch (e) {}
+        sync();
+      });
+    })();
+
+    // Given a CSS color (hex, rgb(), or named color), return '#000' or '#fff'
+    // depending on which gives better contrast against that background.
+    function getReadableTextColor(bgColor) {
+      if (!bgColor) return '#fff';
+
+      // Use the browser to resolve any valid CSS color (hex, rgb, named, etc.)
+      // into an rgb(...) string we can parse reliably.
+      const probe = document.createElement('span');
+      probe.style.color = bgColor;
+      probe.style.display = 'none';
+      document.body.appendChild(probe);
+      const resolved = getComputedStyle(probe).color; // e.g. "rgb(255, 209, 0)"
+      document.body.removeChild(probe);
+
+      const match = resolved.match(/(\d+(\.\d+)?)/g);
+      if (!match || match.length < 3) return '#fff';
+
+      const [r, g, b] = match.slice(0, 3).map(Number);
+
+      // Relative luminance (WCAG-ish approximation)
+      const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+
+      // Light backgrounds get black text, dark backgrounds get white text.
+      return luminance > 0.6 ? '#000' : '#fff';
+    }
+
+    // Toggle "Expanded" mode: shows every level's full stats inline on its card,
+    // without needing to click into the popup.
+    function toggleExpandedMode() {
+      const body = document.body;
+      const btn = document.getElementById('expandedBtn');
+      const isExpanded = body.classList.toggle('expanded-mode');
+      btn.classList.toggle('active', isExpanded);
+    }
+
+    // Filter the leaderboard's player cards by name as the user types
+    function filterLeaderboard() {
+      const query = document.getElementById('leaderboardSearchInput').value.trim().toLowerCase();
+      const players = document.querySelectorAll('#ranking .player');
+      players.forEach(playerDiv => {
+        const nameSpan = playerDiv.querySelector('.player-name');
+        const name = nameSpan ? nameSpan.textContent.toLowerCase() : '';
+        playerDiv.style.display = name.includes(query) ? '' : 'none';
+      });
+    }
+
+    // Render the right-hand "Stats Viewer" panel for the selected player.
+    // playerLevels is already sorted by placement ascending, i.e. hardest level first —
+    // exactly the order we want to display completions in (hardest to easiest).
+    function renderPlayerStatsPanel(playerName, rank, totalPoints, playerLevels, levelsData) {
+      const main = document.getElementById('statsViewerMain');
+
+      const enhancedLevels = playerLevels.map(level => {
+        const levelData = levelsData.levels[level.placement - 1];
+        return {
+          ...level,
+          difficulty: levelData ? levelData.difficulty : null,
+        };
+      });
+
+      // Hardest demon = the lowest placement number (closer to #1 = harder) among completions
+      const hardest = enhancedLevels.length > 0 ? enhancedLevels[0] : null;
+      const completedCount = enhancedLevels.filter(l => l.progress >= 100).length;
+      const progressCount = enhancedLevels.filter(l => l.progress < 100).length;
+
+      main.innerHTML = `
+        <div class="stats-viewer-header">
+          <div class="stats-avatar">${playerName.charAt(0).toUpperCase()}</div>
+          <div>
+            <h2 class="stats-player-name">${playerName}</h2>
+            <div class="stats-player-rank">Rank #${rank}</div>
+          </div>
+        </div>
+        <div class="stats-grid">
+          <div class="stats-card">
+            <div class="stats-card-label">Total Points</div>
+            <div class="stats-card-value">${totalPoints.toLocaleString()}</div>
+          </div>
+          <div class="stats-card">
+            <div class="stats-card-label">Levels Completed</div>
+            <div class="stats-card-value">${completedCount}${progressCount ? ` <span class="stats-card-sub">+${progressCount} in progress</span>` : ''}</div>
+          </div>
+          <div class="stats-card">
+            <div class="stats-card-label">Hardest Demon</div>
+            <div class="stats-card-value stats-card-value-small">${hardest ? hardest.name : '—'}</div>
+          </div>
+        </div>
+        <h3 class="stats-section-title">Completions <span class="stats-section-sub">(hardest \u2192 easiest)</span></h3>
+        <div class="stats-completions-list">
+          ${enhancedLevels.map(level => `
+            <div class="stats-completion-row">
+              <span class="stats-completion-placement">#${level.placement}</span>
+              <img class="stats-completion-icon" src="${getDifficultyIcon(level.difficulty)}" alt="${level.difficulty || ''}">
+              <span class="stats-completion-name">${level.name}</span>
+              ${level.progress < 100 ? `<span class="stats-completion-progress">${level.progress}%</span>` : ''}
+            </div>
+          `).join('') || '<div class="stats-viewer-placeholder">No completions yet.</div>'}
+        </div>
+        <button class="player-btn stats-packs-btn" id="statsPacksBtn">View Completed Packs</button>
+      `;
+
+      // Wire up the Packs button without embedding JSON into an HTML attribute string
+      const packsBtn = document.getElementById('statsPacksBtn');
+      packsBtn.addEventListener('click', () => {
+        showPlayerPacks(playerName, playerLevels);
+      });
+    }
+
+    // Toggle the leaderboard popup is now defined in script.js
+
+    // Function to load leaderboard data
+    function loadLeaderboard() {
+      const listType = document.getElementById('listType').value;
+      console.log('Selected list type:', listType);
+
+      // Reset any active search filter when the leaderboard (re)loads
+      const lbSearch = document.getElementById('leaderboardSearchInput');
+      if (lbSearch) lbSearch.value = '';
+
+      // Fetch levels and players data based on the selected list type
+      let levelsPromise, playersPromise;
+
+      if (listType === 'demon') {
+        levelsPromise = fetch('Data/demon_levels.json').then(response => response.json());
+        playersPromise = fetch('Data/demon_players.json').then(response => response.json());
+      } else if (listType === 'platformer') {
+        levelsPromise = fetch('Data/plat_levels.json').then(response => response.json());
+        playersPromise = fetch('Data/plat_players.json').then(response => response.json());
+      } else if (listType === 'challenge') {
+        levelsPromise = fetch('Data/chal_levels.json').then(response => response.json());
+        playersPromise = fetch('Data/chal_players.json').then(response => response.json());
+      } else if (listType === 'unverified') {
+        levelsPromise = fetch('Data/unver_levels.json').then(response => response.json());
+        playersPromise = fetch('Data/unver_players.json').then(response => response.json());
+      } else {
+        console.error('Invalid list type');
+        return;
+      }
+
+      Promise.all([
+        levelsPromise,
+        playersPromise,
+        fetch('Data/badges.json').then(response => response.json())
+      ])
+      .then(([levelsData, playersData, badgesData]) => {
+        const ranking = document.getElementById('ranking');
+        const playerPoints = {};
+        const playerLevels = {}; // Initialize playerLevels object
+
+        // Sort badges based on their order in badges.json
+        const sortedBadges = badgesData.badges.sort((a, b) => a.order - b.order);
+
+        // Loop through players data to calculate player points and store completed levels
+        playersData.players.forEach(playerData => {
+          const playerName = playerData.playername;
+          const playerLevelsList = playerData.levels;
+          const playerBadges = playerData.badges;
+
+          // Initialize points for the player
+          let points = 0;
+
+          // Initialize array to store player's levels
+          playerLevels[playerName] = [];
+
+          // Loop through the player's levels list
+          for (let i = 0; i < playerLevelsList.length; i += 2) {
+            const levelName = playerLevelsList[i];
+            const progress = playerLevelsList[i + 1];
+            const levelInfo = levelsData.levels.find(level => level.name === levelName);
+
+            // Calculate points based on level position and progress
+            const levelPoints = Math.round(500 * (0.97 ** (levelsData.levels.findIndex(l => l.name === levelName))));
+            if (progress >= 100) {
+              points += levelPoints;
+            } else {
+              points += Math.round(levelPoints * (progress / 100));
+            }
+
+            // Store player's levels for display
+            playerLevels[playerName].push({ name: levelName, progress: progress, placement: levelsData.levels.findIndex(l => l.name === levelName) + 1 });
+          }
+
+          // Sort player's levels by placement
+          playerLevels[playerName].sort((a, b) => a.placement - b.placement);
+
+          // Store player's total points
+          playerPoints[playerName] = points;
+        });
+
+        // Sort players based on total points
+        const sortedPlayers = Object.keys(playerPoints).sort((a, b) => playerPoints[b] - playerPoints[a]);
+
+        // Render leaderboard based on sorted players
+        ranking.innerHTML = ''; // Clear previous content
+        sortedPlayers.forEach((playerName, index) => {
+          const playerData = playersData.players.find(player => player.playername === playerName);
+          const rank = index + 1;
+          const playerDiv = document.createElement('div');
+          playerDiv.classList.add('player');
+          playerDiv.dataset.playerName = playerName;
+          if (rank === 1) playerDiv.classList.add('player-top1');
+          else if (rank === 2) playerDiv.classList.add('player-top2');
+          else if (rank === 3) playerDiv.classList.add('player-top3');
+
+          // Rank badge (left side)
+          const rankDiv = document.createElement('div');
+          rankDiv.classList.add('player-rank');
+          rankDiv.textContent = `#${rank}`;
+
+          // Avatar circle with the player's initial
+          const avatarDiv = document.createElement('div');
+          avatarDiv.classList.add('player-avatar');
+          avatarDiv.textContent = playerName.charAt(0).toUpperCase();
+
+          const playerInfoDiv = document.createElement('div');
+          playerInfoDiv.classList.add('player-info');
+
+          const nameRow = document.createElement('div');
+          nameRow.classList.add('player-name-row');
+          const playerNameSpan = document.createElement('span');
+          playerNameSpan.classList.add('player-name');
+          playerNameSpan.textContent = playerName;
+          nameRow.appendChild(playerNameSpan);
+          playerInfoDiv.appendChild(nameRow);
+
+          // Add badges sorted by their order (compact row, shown under the name)
+          const badgeRow = document.createElement('div');
+          badgeRow.classList.add('player-badge-row');
+          sortedBadges.forEach(badge => {
+            if (playerData.badges && playerData.badges.includes(badge.name)) {
+              const badgeSpan = document.createElement('span');
+              badgeSpan.classList.add('badge');
+              badgeSpan.textContent = badge.name;
+              badgeSpan.style.backgroundColor = badge.color;
+              badgeSpan.style.color = getReadableTextColor(badge.color);
+              badgeSpan.title = badge.lore;
+              badgeSpan.setAttribute('data-tooltip', badge.lore); // Set tooltip data
+              // Raise this player's card above the others while its badge tooltip is shown,
+              // so the tooltip isn't clipped/covered by the next player card below it.
+              badgeSpan.addEventListener('mouseenter', () => playerDiv.classList.add('badge-tooltip-active'));
+              badgeSpan.addEventListener('mouseleave', () => playerDiv.classList.remove('badge-tooltip-active'));
+              badgeRow.appendChild(badgeSpan);
+            }
+          });
+          if (badgeRow.children.length > 0) {
+            playerInfoDiv.appendChild(badgeRow);
+          }
+
+          // Points pill
+          const pointsDiv = document.createElement('div');
+          pointsDiv.classList.add('player-points');
+          const pointsValue = document.createElement('span');
+          pointsValue.classList.add('player-points-value');
+          pointsValue.textContent = playerPoints[playerName].toLocaleString();
+          const pointsLabel = document.createElement('span');
+          pointsLabel.classList.add('player-points-label');
+          pointsLabel.textContent = 'points';
+          pointsDiv.appendChild(pointsValue);
+          pointsDiv.appendChild(pointsLabel);
+
+          const playerMainDiv = document.createElement('div');
+          playerMainDiv.classList.add('player-main');
+          playerMainDiv.appendChild(avatarDiv);
+          playerMainDiv.appendChild(playerInfoDiv);
+
+          playerDiv.appendChild(rankDiv);
+          playerDiv.appendChild(playerMainDiv);
+          playerDiv.appendChild(pointsDiv);
+
+          // Clicking a player row loads their full stats into the right-hand panel
+          playerDiv.addEventListener('click', () => {
+            document.querySelectorAll('#ranking .player').forEach(p => p.classList.remove('player-selected'));
+            playerDiv.classList.add('player-selected');
+            renderPlayerStatsPanel(playerName, rank, playerPoints[playerName], playerLevels[playerName], levelsData);
+          });
+
+          ranking.appendChild(playerDiv);
+        });
+
+        // Auto-select the top-ranked player so the right panel isn't empty on open
+        const firstPlayer = ranking.querySelector('.player');
+        if (firstPlayer) firstPlayer.click();
+
+        // Apply animations to the leaderboard items
+        animateLeaderboardItems();
+      })
+      .catch(error => console.error('Error fetching leaderboard data:', error));
+    }
+
+    // Initialize page when loaded
+    document.addEventListener('DOMContentLoaded', function() {
+      // Call loadLevels function initially to load Demon List levels
+      loadLevels();
+
+      // Wire up the "Lists" navbar dropdown
+      const listsToggle = document.getElementById('listsDropdownToggle');
+      const listsMenu = document.getElementById('listsDropdownMenu');
+      const listTypeSelect = document.getElementById('listType');
+      const listLabels = {
+        demon: 'Demon List',
+        platformer: 'Platformer Demon List',
+        challenge: 'Challenge List',
+        unverified: 'Unverified List'
+      };
+
+      listsToggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        listsMenu.classList.toggle('show');
+      });
+
+      document.querySelectorAll('.navbar-dropdown-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const listType = item.dataset.list;
+          listTypeSelect.value = listType;
+          listsToggle.textContent = `${listLabels[listType]} ▾`;
+          listsMenu.classList.remove('show');
+
+          loadLevels();
+          const leaderboardPopup = document.getElementById('leaderboardPopup');
+          if (leaderboardPopup.style.display === 'block') {
+            loadLeaderboard();
+          }
+        });
+      });
+
+      // Close the dropdown when clicking elsewhere on the page
+      document.addEventListener('click', () => {
+        listsMenu.classList.remove('show');
+      });
+    });
+  </script>
+
+</body>
+
+</html>
